@@ -58,18 +58,22 @@ Status e_series(double eps, double *result) {
         n++;
     }
     if (n >= 1000000) return ERR_ITER_LIMIT;
+    if (!isfinite(sum)) return ERR_NAN;
     *result = sum;
     return OK;
 }
 
-e_eq(double eps, double *result) {
+Status e_eq(double eps, double *result) {
     double x = 2.0;
     int n = 0;
     while (n < 1000000) {
         double fx = log(x) - 1.0;
         double dfx = 1.0 / x;
+        
         if (fabs(dfx) < 1e-300) return ERR_NAN;
         double x_new = x - fx / dfx;
+
+        if (!isfinite(x_new)) return ERR_NAN;
         if (fabs(x_new - x) < eps) {
             *result = x_new;
             return OK;
@@ -114,7 +118,7 @@ Status pi_eq(double eps, double *result) {
     for (int n = 0; n < 1000000; ++n) {
         double fx = cos(x) + 1.0;
         double dfx = -sin(x);
-        if (fabs(dfx) < 1e-300) retrun ERR_NAN;
+        if (fabs(dfx) < 1e-300) return ERR_NAN;
         double x_new = x - fx / dfx;
         if (fabs(x_new - x) < eps) {
             *result = x_new;
@@ -159,7 +163,7 @@ Status ln2_series(double eps, double *result) {
 
 Status ln2_eq(double eps, double *result) {
     double x = 0.5;
-    for (int i = 0; n < 100000; ++n) {
+    for (int n = 0; n < 100000; ++n) {
         double fx = exp(x) - 2.0;
         double dfx = exp(x);
         if (fabs(dfx) < 1e-300) return ERR_NAN;
@@ -213,7 +217,7 @@ Status sq2_eq(double eps, double *result) {
             *result = x_new;
             return OK;
         }
-        x_new = x;
+        x = x_new;
     }
     return ERR_ITER_LIMIT;
 }
@@ -232,36 +236,135 @@ Status sq2_lim(double eps, double *result) {
     return ERR_ITER_LIMIT;
 }
 
-Status y_sepies(double eps, double *result) {
-    const double PI = 3.14159265358979323846;
-    double sum = 0.0, term = 0.0;
+Status y_series(const double eps, double *result) {
+    if (eps <= 0.0 || eps >= 1.0) return ERR_EPSILON;
+
+    double sum = 0.0;
+    const int max_iter = 100000000;
     int k = 1;
-    do {
-        term = 1.0 / (double)k - log(1.0 + 1.0 / (double)k);
+    for (; k < max_iter; ++k) {
+        double term = 1.0 / (double)k - log1p(1.0 / (double)k);
+        if (!isfinite(term)) return ERR_NAN;
         sum += term;
-        k++;
-        if (k >= 10000000) return ERR_ITER_LIMIT;
-    } while (fabs(term) > eps);
-    *result = - (PI * PI) / 6 + sum;
+        if (1.0 / (2.0 * (double)k) < eps) break;
+    }
+    if (k >= max_iter) return ERR_ITER_LIMIT;
+    *result = sum;
     return OK;
 }
 
 
-Status y_eq(double eps, double *result) {
-    // тут тожже формула хуйни во первых вместо гаммы x это еще ладно так оно сходится лет сто короче тоже логарифмируем эту парашу
-}
-Status y_lim(double const eps, double *result) {
-    double prev = 0.0;
-    double cur = 0.0;
+Status y_eq(const double eps, double *result) {
+    if (eps <= 0.0 || eps >= 1.0) return ERR_EPSILON;
 
-    for (int m = 1; m <= 10000000; ++m) {
-        double sum = 0.0;
-        double c = 1.0;
-        for (int k = 1; k <= m; ++k) {
-            c *= double(m - k + 1) / (double)k;
-            double term = c * ((k % 2 == 0) ? 1.0 : -1.0) / (double)k * log((double)k);
-            sum += term;
+    const int N = 10000000;           
+    const double max_accuracy = 1.0 / log((double)N);
+    if (eps < max_accuracy * 0.5) return ERR_ITER_LIMIT;
+
+    char *sieve = (char *)malloc((size_t)N + 1);
+    if (!sieve) return ERR_MEMORY;
+    memset(sieve, 1, (size_t)N + 1);
+    sieve[0] = sieve[1] = 0;
+
+    for (int i = 2; (long long)i * i <= N; ++i) {
+        if (sieve[i]) {
+            for (long long j = (long long)i * i; j <= N; j += i)
+                sieve[(int)j] = 0;
         }
-        cur == sum
     }
+
+    double prod = 1.0;
+    for (int p = 2; p <= N; ++p) {
+        if (sieve[p]) {
+            prod *= (1.0 - 1.0 / (double)p);
+            if (prod <= 0.0) { free(sieve); return ERR_NAN; }
+        }
+    }
+    free(sieve);
+
+    double val = -log(log((double)N) * prod);
+    if (!isfinite(val)) return ERR_NAN;
+    *result = val;
+    return OK;
+}
+
+Status y_lim(const double eps, double *result) {
+    if (!result) return ERR_UNKNOWN;
+    if (eps <= 0.0 || eps >= 1.0) return ERR_EPSILON;
+
+    double H = 0.0, prev = 0.0;
+    const int max_n = 100000000;
+    int n = 1;
+    for (; n < max_n; ++n) {
+        H += 1.0 / (double)n;
+        double val = H - log((double)n);
+        if (n > 1 && fabs(val - prev) < eps) {
+            *result = val;
+            return OK;
+        }
+        prev = val;
+    }
+    return ERR_ITER_LIMIT;
+}
+
+void print_constant(const char *name, Status st, double value, double eps) {
+    printf("  %-12s: ", name);
+    switch (st) {
+        case OK:
+            printf("%.15g (eps=%.1e)\n", value, eps);
+            break;
+        case ERR_ITER_LIMIT:
+            printf("лимит итераций\n");
+            break;
+        case ERR_NAN:
+            printf("NaN/Inf в вычислениях\n");
+            break;
+        case ERR_EPSILON:
+            printf("некорректный эпсилон\n");
+            break;
+        default:
+            printf("неизвестная ошибка (%d)\n", (int)st);
+    }
+}
+
+int main(int argc, char **argv) {
+    if (argc != 2) {
+        fprintf(stderr, "Неверное число аргументов");
+        return ERR_ARGC;
+    }
+    double eps;
+    Status st = correct_epsilon(argv[1], &eps);
+    if (st != OK) {
+        fprintf(stderr, "Некорректный эпсилон\n");
+        return st;
+    }
+
+    double val;
+
+    printf("e:\n");
+    st = e_series(eps, &val);  print_constant("ряд",       st, val, eps);
+    st = e_eq    (eps, &val);  print_constant("уравнение", st, val, eps);
+    st = e_lim   (eps, &val);  print_constant("предел",    st, val, eps);
+
+    printf("pi:\n");
+    st = pi_series(eps, &val);  print_constant("ряд",       st, val, eps);
+    st = pi_eq    (eps, &val);  print_constant("уравнение", st, val, eps);
+    st = pi_lim   (eps, &val);  print_constant("предел",    st, val, eps);
+
+    printf("ln2:\n");
+    st = ln2_series(eps, &val);  print_constant("ряд",       st, val, eps);
+    st = ln2_eq    (eps, &val);  print_constant("уравнение", st, val, eps);
+    st = ln2_lim   (eps, &val);  print_constant("предел",    st, val, eps);
+
+    printf("2^0.5:\n");
+    st = sq2_series(eps, &val);  print_constant("ряд",       st, val, eps);
+    st = sq2_eq    (eps, &val);  print_constant("уравнение", st, val, eps);
+    st = sq2_lim   (eps, &val);  print_constant("предел",    st, val, eps);
+
+    printf("y:\n");
+    st = y_series(eps, &val);  print_constant("ряд",       st, val, eps);
+    st = y_eq    (eps, &val);  print_constant("уравнение", st, val, eps);
+    st = y_lim   (eps, &val);  print_constant("предел",    st, val, eps);
+
+    return 0;
 }
