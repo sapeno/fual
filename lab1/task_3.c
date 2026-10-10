@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <float.h>
+#include <limits.h>
 
 typedef enum {
     OK,
@@ -37,12 +38,14 @@ int parse_double(const char *s, double *result) {
     return 1;
 }
 
-int parse_long(const char *s, long *result) {
+int parse_int(const char *s, int *result) {
     if (s == NULL || *s == '\0') return 0;
     char *endptr = NULL;
-    long val = strtol(s, &endptr, 10);
+    long long val = strtoll(s, &endptr, 10);
+
     if (endptr == s || *endptr != '\0') return 0;
-    *result = val;
+    if (val > INT_MAX || val < INT_MIN) return 0;
+    *result = (int)val;
     return 1;
 }
 
@@ -53,9 +56,11 @@ int correct_flag(const char *flag, char *result) {
     *result = flag[1];
     return 1;
 }
+
 int is_zero(const double a, const double eps) {
     return fabs(a) < eps;
 }
+
 Status quad(const double a, const double b, const double c, const double eps, Result *result) {
     if (is_zero(a, eps)) {
         if (is_zero(b, eps)) {
@@ -71,7 +76,19 @@ Status quad(const double a, const double b, const double c, const double eps, Re
         return OK;
     }
 
-    double D = b*b - 4.0 * a * c;
+    if (fabs(b) > sqrt(DBL_MAX)) return ERR_OVERFLOW;
+    double b2 = b * b;
+
+    if (fabs(a) > DBL_MAX / 4.0) return ERR_OVERFLOW;
+    double four_a = 4.0 * a;
+    if (fabs(four_a) > DBL_MAX / fabs(c) && c != 0.0) return ERR_OVERFLOW;
+    double four_ac = four_a * c;
+
+    if (b2 > 0.0 && four_ac < 0.0 && b2 > DBL_MAX + four_ac) return ERR_OVERFLOW;
+    if (b2 < 0.0 && four_ac > 0.0 && four_ac > DBL_MAX + b2) return ERR_OVERFLOW;
+    double D = b2 - four_ac;
+    if (isinf(D) || isnan(D)) return ERR_OVERFLOW;
+
     if (D > eps) {
         double sq = sqrt(D);
         result->root = ROOTS_TWO;
@@ -86,7 +103,7 @@ Status quad(const double a, const double b, const double c, const double eps, Re
     return OK;
 }
 
-Status mul(const long a, const long b, int *result) {
+Status mul(const int a, const int b, int *result) {
     if (a == 0 || b == 0) return ERR_ZERO;
     *result = (a % b == 0);
     return OK;
@@ -109,11 +126,15 @@ Status triangle(const double a, const double b, const double c, const double eps
     double a2 = s[0] * s[0];
     double b2 = s[1] * s[1];
     double c2 = s[2] * s[2];
-    if (isinf(a2) || isinf(b2) || isinf(c2))
+    if (isinf(a2) || isinf(b2) || isinf(c2) || isnan(a2) || isnan(b2) || isnan(c2))
         return ERR_OVERFLOW;
 
+    
+    if (a2 > DBL_MAX - b2) {
+        return ERR_OVERFLOW;
+    }
     double a_b = a2 + b2;
-    if (isinf(a_b)) return ERR_OVERFLOW;
+    if (isinf(a_b) || isnan(a_b)) return ERR_OVERFLOW;
 
     *result = (fabs(a_b - c2) < eps);
     return OK;
@@ -178,14 +199,14 @@ Status print_q(const double eps, const double a, const double b, const double c)
     return OK;
 }
 
-Status print_m(const long a, const long b) {
+Status print_m(const int a, const int b) {
     int result = 0;
     Status status = mul(a, b, &result);
     if (status != OK) return status;
     if (result)
-        printf("%ld кратно %ld.\n", a, b);
+        printf("%d кратно %d.\n", a, b);
     else
-        printf("%ld не кратно %ld.\n", a, b);
+        printf("%d не кратно %d.\n", a, b);
     return OK;
 }
 
@@ -232,8 +253,8 @@ int main(int argc, char *argv[]) {
                 return ERR_ARGS;
             }
 
-            long a = 0, b = 0;
-            if (!parse_long(argv[2], &a) || !parse_long(argv[3], &b) || a == 0 || b == 0) {
+            int a = 0, b = 0;
+            if (!parse_int(argv[2], &a) || !parse_int(argv[3], &b) || a == 0 || b == 0) {
                 printf("Некорректные числа.\n");
                 return ERR_NUM;
             }

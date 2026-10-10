@@ -258,7 +258,7 @@ Status y_eq(const double eps, double *result) {
     if (eps <= 0.0 || eps >= 1.0) return ERR_EPSILON;
 
     const int N = 10000000;           
-    const double max_accuracy = 1.0 / log((double)N);
+    const double max_accuracy = 1.0 / (double)N;
     if (eps < max_accuracy * 0.5) return ERR_ITER_LIMIT;
 
     char *sieve = (char *)malloc((size_t)N + 1);
