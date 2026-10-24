@@ -165,15 +165,13 @@ Status to_TO_flag(const char *s, int base, int upper, Buf *b) {
         p++;
     }
 
-    if (res * (long long)sign < LLONG_MIN) return ERR_OVERFLOW;
-    res = (long long) sign * res;
+    if (sign < 0) res = -res;
 
     char tmp[32];
     int n = snprintf(tmp, sizeof tmp, "%lld", res);
     if (n < 0) return ERR_FORMAT;
+    
     return buf_puts(b, tmp);
-
-    return OK;
 }
 
 Status mi_mu_md_mf_flag(const unsigned char *bytes, size_t n, Buf *b) {
@@ -191,6 +189,15 @@ Status mi_mu_md_mf_flag(const unsigned char *bytes, size_t n, Buf *b) {
     return OK;
 }
 
+static void sync_back(Buf *b, int is_file, const Buf *bf) {
+    if (!is_file) {
+        b->pos = bf->pos;
+        b->overflow = bf->overflow;
+    }
+}
+
+#define RET_SYNC(st) do { sync_back(b, is_file, &bf); return (st); } while (0)
+
 Status poexali(int is_file, FILE *file, Buf *b, const char *format, va_list args, int *out_len) {
     if (!format) return ERR_ARGS;
     if (is_file && !file) return ERR_ARGS;
@@ -206,7 +213,7 @@ Status poexali(int is_file, FILE *file, Buf *b, const char *format, va_list args
     while (*p){
         if (*p != '%') {
             status = buf_putc(&bf, *p);
-            if (status != OK) return status;
+            if (status != OK) RET_SYNC(status);
             p++;
             continue;
         }
@@ -214,7 +221,7 @@ Status poexali(int is_file, FILE *file, Buf *b, const char *format, va_list args
         p++;
         if (*p == '%') {
             status = buf_putc(&bf, '%');
-            if (status != OK) return status;
+            if (status != OK) RET_SYNC(status);
             p++;
             continue;
         }
@@ -222,27 +229,27 @@ Status poexali(int is_file, FILE *file, Buf *b, const char *format, va_list args
         if (p[0] == 'R' && p[1] == 'o') {
             int v = va_arg(args, int);
             status = Ro_flag(v, ROMAN, &bf);
-            if (status != OK) return status;
+            if (status != OK) RET_SYNC(status);
             p += 2;
         } else if (p[0] == 'Z' && p[1] == 'r') {
             unsigned int v = va_arg(args, unsigned int);
             status = Ze_flag(v, &bf);
-            if (status != OK) return status;
+            if (status != OK) RET_SYNC(status);
             p += 2;
         } else if (p[0] == 'C' && (p[1] == 'v' || p[1] == 'V')) {
             int upper = (p[1] == 'V');
             int v = va_arg(args, int);
             int base = va_arg(args, int);
             status = Cv_CV_flag(v, base, upper, &bf);
-            if (status != OK) return status;
+            if (status != OK) RET_SYNC(status);
             p+=2;
         } else if (p[0] == 't' && (p[1] == 'o' || p[1] == 'O')) {
             int upper = (p[1] == 'O');
             const char *s = va_arg(args, const char *);
             int base = va_arg(args, int);
-            if (!s) return ERR_IO;
+            if (!s) RET_SYNC(ERR_IO);
             status = to_TO_flag(s, base, upper, &bf);
-            if (status != OK) return status;
+            if (status != OK) RET_SYNC(status);
             p += 2;
         } else if (p[0] == 'm' && (p[1]=='i' || p[1]=='u' || p[1]=='d' || p[1]=='f')) {
             char c = p[1];
@@ -259,7 +266,7 @@ Status poexali(int is_file, FILE *file, Buf *b, const char *format, va_list args
                 float v = (float)va_arg(args, double);
                 status = mi_mu_md_mf_flag((const unsigned char*)&v, sizeof(v), &bf);
             }
-            if (status != OK) return status;
+            if (status != OK) RET_SYNC(status);
             p += 2;
 
         } else {
@@ -270,7 +277,7 @@ Status poexali(int is_file, FILE *file, Buf *b, const char *format, va_list args
             while (*p && (isdigit((unsigned char)*p) || *p == '.') && si < 60) spec[si++] = *p++;
             while (*p && strchr("hljztL", *p) && si < 60) spec[si++] = *p++;
 
-            if (!*p) return ERR_FORMAT;
+            if (!*p) RET_SYNC(ERR_FORMAT);
 
             char conv = *p++;
             switch (conv) {
@@ -279,7 +286,7 @@ Status poexali(int is_file, FILE *file, Buf *b, const char *format, va_list args
                 case 'E': case 'g': case 'G': case 'a': case 'A':
                     break;
                 default:
-                    return ERR_FORMAT;
+                    RET_SYNC(ERR_FORMAT);
             }
 
             spec[si++] = conv; 
@@ -290,27 +297,24 @@ Status poexali(int is_file, FILE *file, Buf *b, const char *format, va_list args
             int need = vsnprintf(NULL, 0, spec, args_copy);
             va_end(args_copy);
 
-            if (need < 0) return ERR_FORMAT;
+            if (need < 0) RET_SYNC(ERR_FORMAT);
 
             char *tmp = malloc(need + 1);
-            if (tmp == NULL) return ERR_ALLOC;
+            if (tmp == NULL) RET_SYNC(ERR_ALLOC);
 
             int n = vsnprintf(tmp, need + 1, spec, args);
             if (n < 0) {
                 free(tmp);
-                return ERR_FORMAT;
+                RET_SYNC(ERR_FORMAT);
             }
 
             status = buf_puts(&bf, tmp);
             free(tmp);
-            if (status != OK) return status;
+            if (status != OK) RET_SYNC(status);
         }
     }
 
-    if (!is_file) {
-    b->pos = bf.pos;
-    b->overflow = bf.overflow;
-    }
+    sync_back(b, is_file, &bf);
 
     if (out_len) {
         if (is_file) *out_len = 0;
@@ -377,11 +381,16 @@ int main() {
     if (status == OK) printf("%s\n", buf);
     else fprintf(stderr, "Ошибка выполнения %d.\n", status); 
 
-
+    status = oversprint(buf, sizeof buf, "Roman %Ro", &len, 0);
+    if (status == OK) printf("%s\n", buf);
+    else fprintf(stderr, "Ошибка выполнения %d.\n", status); 
 
     printf("\noverfprintf.\n");
 
     status = overfprint(stdout, "Roman 2024: %Ro\n", &len, 2024);
+    if (status != OK) fprintf(stderr, "Ошибка выполнения %d.\n", status); 
+
+    status = overfprint(stdout, "Roman 2024: %Ro\n", &len, -5);
     if (status != OK) fprintf(stderr, "Ошибка выполнения %d.\n", status); 
 
     status = overfprint(stdout, "Roman 5000: %Ro\n", &len, 5000);
@@ -408,6 +417,31 @@ int main() {
     if (status != OK) fprintf(stderr, "Ошибка выполнения %d.\n", status); 
     
     status = overfprint(stdout, "%d %s %.2f\n", &len, 42, "hi", 3.14159);
+    if (status != OK) fprintf(stderr, "Ошибка выполнения %d.\n", status); 
+
+    status = overfprint(stdout, "Max Zeck: %Zr\n", &len, 4294967295u); 
+    if (status != OK) fprintf(stderr, "Ошибка выполнения %d.\n", status); 
+    
+    status = overfprint(stdout, "Min Int base36: %Cv\n", &len, -2147483647 - 1, 36);
+    if (status != OK) fprintf(stderr, "Ошибка выполнения %d.\n", status); 
+
+    status = overfprint(stdout, "Wrong base: %Cv\n", &len, 255, 100);
+    if (status != OK) fprintf(stderr, "Ошибка выполнения %d.\n", status); 
+
+    
+    printf("\n");
+    status = overfprint(stdout, "%to\n", &len, "999999999999999999999999999", 10);
+    if (status != OK) fprintf(stderr, "Ошибка выполнения %d.\n", status); 
+    
+
+
+    status = overfprint(stdout, "%to\n", &len, "-999999999999999999999999999", 10);
+    if (status != OK) fprintf(stderr, "Ошибка выполнения %d.\n", status); 
+
+    status = overfprint(stdout, "%to\n", &len, "9223372036854775808", 10);
+    if (status != OK) fprintf(stderr, "Ошибка выполнения %d.\n", status); 
+
+    status = overfprint(stdout, "%to\n", &len, "18446744073709551615", 10);
     if (status != OK) fprintf(stderr, "Ошибка выполнения %d.\n", status); 
 
     return status;
